@@ -195,7 +195,7 @@ def update_expert_bias(model: nn.Module) -> None:
     experts that received more tokens than average get negative bias adjustment,
     experts that received fewer get positive bias adjustment.
 
-    Called per micro-step, before get_load_balance_stats (which handles zeroing tokens_per_expert).
+    Called once per optimizer step, before get_load_balance_stats (which handles zeroing tokens_per_expert).
     tokens_per_expert is all-reduced across ranks before computing the bias delta.
     """
     language_model = get_language_model(model)

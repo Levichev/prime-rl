@@ -421,6 +421,10 @@ class PrimeMonitorConfig(BaseConfig):
     ] = None
 
 
+class TensorBoardConfig(BaseConfig):
+    """Configures logging to TensorBoard."""
+
+
 class HeartbeatConfig(BaseConfig):
     """Configures the heartbeat for BetterStack."""
 

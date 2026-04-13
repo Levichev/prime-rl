@@ -153,6 +153,7 @@ async def orchestrate(config: OrchestratorConfig):
     monitor = setup_monitor(
         wandb_config=config.wandb,
         prime_config=config.prime_monitor,
+        tensorboard=config.tensorboard,
         output_dir=config.output_dir,
         tokenizer=tokenizer,
         run_config=config,
