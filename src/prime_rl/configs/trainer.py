@@ -8,6 +8,7 @@ from prime_rl.configs.shared import (
     FileSystemTransportConfig,
     HeartbeatConfig,
     MetricsServerConfig,
+    TensorBoardConfig,
     TrainerLogConfig,
     TransportConfig,
     WandbConfig,
@@ -749,6 +750,9 @@ class TrainerConfig(BaseConfig):
 
     # The wandb configuration
     wandb: WandbConfig | None = None
+
+    # The TensorBoard configuration
+    tensorboard: TensorBoardConfig | None = None
 
     output_dir: Annotated[
         Path,
