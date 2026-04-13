@@ -29,6 +29,7 @@ from prime_rl.trainer.model import (
     is_tt_moe_model,
     setup_tokenizer,
     setup_model,
+    update_expert_bias,
 )
 from prime_rl.trainer.parallel_dims import get_parallel_dims
 from prime_rl.trainer.perf import get_perf_counter
@@ -361,7 +362,17 @@ def train(config: SFTConfig):
                 scaled_loss.backward()
 
             if is_tt_moe_model(model):
-                max_vio = get_load_balance_stats(model)["max_vio"]
+                if is_first_step and micro_step == 0:
+                    # Diagnostic: check tokens_per_expert on first micro batch
+                    _lm = model.model if hasattr(model, "model") else model
+                    _first_mlp = _lm.layers[0].mlp
+                    logger.info(
+                        f"[diag] tokens_per_expert sum={_first_mlp.tokens_per_expert.sum().item():.0f}, "
+                        f"load_balance_coeff={getattr(_first_mlp, 'load_balance_coeff', None)}, "
+                        f"expert_bias={'present' if getattr(_first_mlp, 'expert_bias', None) is not None else 'None'}"
+                    )
+                max_vio = get_load_balance_stats(model, reset_stats=False)["max_vio"]
+                update_expert_bias(model)
                 if max_vio is not None:
                     max_vio = max_vio.mean()
                     dist.all_reduce(max_vio, op=dist.ReduceOp.MAX)
