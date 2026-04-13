@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from prime_rl.configs.shared import (
     HeartbeatConfig,
     SlurmConfig,
+    TensorBoardConfig,
     TrainerLogConfig,
     WandbConfig,
 )
@@ -188,6 +189,9 @@ class SFTConfig(BaseConfig):
 
     # The wandb configuration
     wandb: WandbConfig | None = None
+
+    # The TensorBoard configuration
+    tensorboard: TensorBoardConfig | None = None
 
     output_dir: Annotated[
         Path,
