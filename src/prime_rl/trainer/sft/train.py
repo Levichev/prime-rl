@@ -29,6 +29,7 @@ from prime_rl.trainer.model import (
     is_tt_moe_model,
     setup_tokenizer,
     setup_model,
+    update_expert_bias,
 )
 from prime_rl.trainer.parallel_dims import get_parallel_dims
 from prime_rl.trainer.perf import get_perf_counter
@@ -361,6 +362,7 @@ def train(config: SFTConfig):
                 scaled_loss.backward()
 
             if is_tt_moe_model(model):
+                update_expert_bias(model)
                 max_vio = get_load_balance_stats(model)["max_vio"]
                 if max_vio is not None:
                     max_vio = max_vio.mean()
