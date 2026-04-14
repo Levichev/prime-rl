@@ -188,6 +188,47 @@ def configure_moe_ep_backend(model: nn.Module, config: ModelConfig) -> None:
         transformer_block.mlp.set_deepep_token_chunk_size(config.deepep_token_chunk_size)
 
 
+def update_expert_bias(model: nn.Module) -> None:
+    """Update expert_bias based on tokens_per_expert for auxiliary-loss-free load balancing.
+
+    Implements the bias update from https://arxiv.org/abs/2408.15664:
+    experts that received more tokens than average get negative bias adjustment,
+    experts that received fewer get positive bias adjustment.
+
+    Called once per optimizer step. tokens_per_expert is all-reduced across ranks
+    before computing the bias delta. Zeroing of tokens_per_expert is handled
+    separately by get_load_balance_stats(reset_stats=True).
+    """
+    language_model = get_language_model(model)
+    for transformer_block in language_model.layers:
+        block_mlp = getattr(transformer_block, "mlp", None)
+        if block_mlp is None or not hasattr(block_mlp, "tokens_per_expert"):
+            continue
+        torch.distributed.all_reduce(block_mlp.tokens_per_expert, op=torch.distributed.ReduceOp.SUM)
+        tokens_per_expert = block_mlp.tokens_per_expert.float()
+        if tokens_per_expert.sum() > 0 and getattr(block_mlp, "load_balance_coeff", None) is not None:
+            bias_delta = block_mlp.load_balance_coeff * torch.sign(tokens_per_expert.mean() - tokens_per_expert)
+            block_mlp.expert_bias.add_(bias_delta)
+
+
+def register_expert_bias_hook(optimizer, model: nn.Module) -> None:
+    """Register an optimizer step pre-hook that updates expert_bias before each step.
+
+    This implements the approach described in the torchtitan MoE code:
+    'expert_bias is updated outside the model in an optimizer step pre hook
+    to work with gradient accumulation.'
+    """
+    from prime_rl.trainer.optim import CPUOffloadOptimizer
+
+    # Get the underlying torch.optim.Optimizer which supports register_step_pre_hook
+    if isinstance(optimizer, CPUOffloadOptimizer):
+        inner_optimizer = optimizer.base_optimizer
+    else:
+        inner_optimizer = optimizer
+
+    inner_optimizer.register_step_pre_hook(lambda opt, args, kwargs: update_expert_bias(model))
+
+
 def get_load_balance_stats(
     model: nn.Module, reset_stats: bool = True, try_to_avoid_padding_experts: bool = True
 ) -> dict[str, Tensor | None]:

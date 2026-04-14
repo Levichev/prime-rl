@@ -27,6 +27,7 @@ from prime_rl.trainer.model import (
     forward,
     get_load_balance_stats,
     is_tt_moe_model,
+    register_expert_bias_hook,
     setup_tokenizer,
     setup_model,
 )
@@ -145,6 +146,10 @@ def train(config: SFTConfig):
     optimizer = setup_optimizer(
         config.optim, list(model.named_parameters()), parallel_dims, cpu_offload=config.model.optim_cpu_offload
     )
+
+    # Register expert bias update hook for MoE load balancing
+    if is_tt_moe_model(model):
+        register_expert_bias_hook(optimizer, model)
 
     # Set up the learning rate scheduler
     scheduler_steps = (
