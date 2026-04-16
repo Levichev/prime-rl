@@ -2,17 +2,19 @@ from pathlib import Path
 
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from prime_rl.configs.shared import PrimeMonitorConfig, WandbWithExtrasConfig
+from prime_rl.configs.shared import PrimeMonitorConfig, TensorBoardConfig, WandbWithExtrasConfig
 from prime_rl.utils.config import BaseConfig
 from prime_rl.utils.monitor.base import Monitor, NoOpMonitor
 from prime_rl.utils.monitor.multi import MultiMonitor
 from prime_rl.utils.monitor.prime import PrimeMonitor
+from prime_rl.utils.monitor.tensorboard import TensorBoardMonitor
 from prime_rl.utils.monitor.wandb import WandbMonitor
 
 __all__ = [
     "Monitor",
     "WandbMonitor",
     "PrimeMonitor",
+    "TensorBoardMonitor",
     "MultiMonitor",
     "NoOpMonitor",
     "setup_monitor",
@@ -37,6 +39,7 @@ def setup_monitor(
     run_config: BaseConfig | None = None,
     *,
     prime_config: PrimeMonitorConfig | None = None,
+    tensorboard: TensorBoardConfig | None = None,
     # Backward compatibility: support old 'config' keyword argument
     config: WandbWithExtrasConfig | None = None,
 ) -> Monitor:
@@ -71,6 +74,9 @@ def setup_monitor(
                 run_config=run_config,
             )
         )
+
+    if tensorboard is not None and output_dir is not None:
+        monitors.append(TensorBoardMonitor(output_dir=output_dir))
 
     if len(monitors) == 0:
         _MONITOR = NoOpMonitor()
