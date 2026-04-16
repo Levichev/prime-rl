@@ -195,18 +195,25 @@ def update_expert_bias(model: nn.Module) -> None:
     experts that received more tokens than average get negative bias adjustment,
     experts that received fewer get positive bias adjustment.
 
-    Called once per optimizer step, before get_load_balance_stats (which handles zeroing tokens_per_expert).
-    tokens_per_expert is all-reduced across ranks before computing the bias delta.
+    Called once per optimizer step, after the micro-batch loop (tokens_per_expert has
+    accumulated across all micro-batches). All-reduces tokens_per_expert in-place so it
+    is globally synced for the subsequent get_load_balance_stats call.
     """
     language_model = get_language_model(model)
+    dist_initialized = torch.distributed.is_available() and torch.distributed.is_initialized()
     for transformer_block in language_model.layers:
         block_mlp = getattr(transformer_block, "mlp", None)
         if block_mlp is None or not hasattr(block_mlp, "tokens_per_expert"):
             continue
-        torch.distributed.all_reduce(block_mlp.tokens_per_expert, op=torch.distributed.ReduceOp.SUM)
+        if dist_initialized:
+            torch.distributed.all_reduce(block_mlp.tokens_per_expert, op=torch.distributed.ReduceOp.SUM)
+        if getattr(block_mlp, "load_balance_coeff", None) is None:
+            continue
         tokens_per_expert = block_mlp.tokens_per_expert.float()
-        if tokens_per_expert.sum() > 0 and getattr(block_mlp, "load_balance_coeff", None) is not None:
-            bias_delta = block_mlp.load_balance_coeff * torch.sign(tokens_per_expert.mean() - tokens_per_expert)
+        if tokens_per_expert.sum() == 0:
+            continue
+        bias_delta = block_mlp.load_balance_coeff * torch.sign(tokens_per_expert.mean() - tokens_per_expert)
+        with torch.no_grad():
             block_mlp.expert_bias.add_(bias_delta)
 
 

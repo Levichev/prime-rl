@@ -338,7 +338,7 @@ def train(config: SFTConfig):
         step_loss_sum = torch.tensor(0.0, device="cuda")
         step_local_token_count = torch.tensor(0, dtype=torch.int64, device="cuda")
         nan_loss_count = torch.tensor(0, device="cuda")
-        batch_max_vio = torch.tensor(0.0, device="cuda")
+        max_vio: torch.Tensor | None = None
         for micro_step in range(grad_accum_steps):
             micro_batch = next(dataiter)
 
@@ -364,12 +364,13 @@ def train(config: SFTConfig):
                 scaled_loss.backward()
 
         if is_tt_moe_model(model):
+            # update_expert_bias all-reduces tokens_per_expert in-place, so the buffer is
+            # globally synced when get_load_balance_stats reads it → max_vio per layer is
+            # identical on all ranks, no additional reduction needed.
             update_expert_bias(model)
-            max_vio = get_load_balance_stats(model)["max_vio"]
-            if max_vio is not None:
-                max_vio = max_vio.mean()
-                dist.all_reduce(max_vio, op=dist.ReduceOp.MAX)
-                batch_max_vio = max_vio
+            layer_max_vio = get_load_balance_stats(model)["max_vio"]
+            if layer_max_vio is not None:
+                max_vio = layer_max_vio.mean()
 
         forward_backward_time = time.perf_counter() - forward_backward_start_time
 
@@ -442,8 +443,8 @@ def train(config: SFTConfig):
         if grad_norm is not None:
             step_message += f" | Grad. Norm: {grad_norm:.4f}"
         step_message += f" | LR: {current_lr:.2e} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}% | Peak Mem.: {peak_memory:.1f}/{max_memory:.1f} GiB ({peak_memory / max_memory * 100:.1f}%)"
-        if is_tt_moe_model(model) and batch_max_vio.item() > 0:
-            step_message += f" | Max Vio: {batch_max_vio.item():.4f}"
+        if is_tt_moe_model(model) and max_vio is not None:
+            step_message += f" | Max Vio: {max_vio.item():.4f}"
         logger.success(step_message)
 
         # Log progress metrics
@@ -511,8 +512,8 @@ def train(config: SFTConfig):
         disk_metrics["step"] = progress.step
         monitor.log(disk_metrics, step=progress.step)
 
-        if is_tt_moe_model(model) and batch_max_vio.item() > 0:
-            monitor.log({"max_vio/mean": batch_max_vio.item(), "step": progress.step}, step=progress.step)
+        if is_tt_moe_model(model) and max_vio is not None:
+            monitor.log({"max_vio/mean": max_vio.item(), "step": progress.step}, step=progress.step)
 
         is_first_step = False
         progress.step += 1
