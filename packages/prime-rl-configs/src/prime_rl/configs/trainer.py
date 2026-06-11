@@ -9,6 +9,7 @@ from prime_rl.configs.shared import (
     FileSystemTransportConfig,
     HeartbeatConfig,
     MetricsServerConfig,
+    TensorBoardConfig,
     TrainerLogConfig,
     TransportConfig,
     WandbConfig,
@@ -525,6 +526,9 @@ class TrainerConfig(BaseConfig):
     log: TrainerLogConfig = TrainerLogConfig()
 
     wandb: WandbConfig | None = None
+
+    tensorboard: TensorBoardConfig | None = None
+    """TensorBoard logging configuration. If set, scalar metrics are mirrored to TensorBoard event files."""
 
     output_dir: Path = Path("outputs")
     """Directory to write outputs to — checkpoints, weights, rollouts, and logs are written as subdirectories. Should be a persistent directory with enough disk space and unique per experiment running on a single node."""

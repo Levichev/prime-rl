@@ -207,6 +207,11 @@ class WandbWithExtrasConfig(WandbConfig):
     """Extras logging configuration. If None, no extras are logged."""
 
 
+class TensorBoardConfig(BaseConfig):
+    log_dir: Path | None = None
+    """Directory to write TensorBoard event files to. Defaults to ``<output_dir>/tensorboard``."""
+
+
 class PrimeMonitorConfig(BaseConfig):
     base_url: str = "https://api.primeintellect.ai/api/v1/rft"
     """Base URL for the Prime Intellect monitoring API."""

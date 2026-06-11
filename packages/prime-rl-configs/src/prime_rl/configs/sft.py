@@ -8,6 +8,7 @@ from renderers import RendererConfig
 from prime_rl.configs.shared import (
     HeartbeatConfig,
     SlurmConfig,
+    TensorBoardConfig,
     TrainerLogConfig,
     WandbConfig,
 )
@@ -197,6 +198,9 @@ class SFTConfig(BaseConfig):
     log: TrainerLogConfig = TrainerLogConfig()
 
     wandb: WandbConfig | None = None
+
+    tensorboard: TensorBoardConfig | None = None
+    """TensorBoard logging configuration. If set, scalar metrics are mirrored to TensorBoard event files."""
 
     output_dir: Path = Path("outputs")
     """Directory to write outputs to — checkpoints and logs are written as subdirectories. Should be a persistent directory with enough disk space and unique per experiment running on a single node."""
