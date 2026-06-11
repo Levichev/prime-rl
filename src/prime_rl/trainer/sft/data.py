@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Literal, TypedDict, cast
 
 import torch
-from datasets import Dataset, interleave_datasets, load_dataset
+from datasets import Dataset, DatasetDict, interleave_datasets, load_dataset, load_from_disk
 from jaxtyping import Bool, Int
 from renderers.base import Renderer, build_training_sample
 from torch import Tensor
@@ -99,7 +99,7 @@ class FakeDataset(StatefulIterableDataset):
             input_ids = (
                 [self.step - 1] * (seq_len + 1)
                 if self.input_ids == "increasing"
-                else torch.randint(0, self.vocab_size, (self.seq_len + 1,)).long().tolist()
+                else torch.randint(0, self.vocab_size, (seq_len + 1,)).long().tolist()
             )
             position_ids = list(range(seq_len))
             loss_mask = [True] * seq_len
@@ -517,7 +517,17 @@ def setup_and_interleave_datasets(
     datasets = []
     for subset, split in subsets_and_splits:
         logger.debug(f"Loading dataset {dataset_name} with {subset=} and {split=}")
-        dataset = cast(Dataset, load_dataset(dataset_name, subset, split=split))
+        try:
+            dataset = cast(Dataset, load_dataset(dataset_name, subset, split=split))
+        except ValueError as e:
+            # Local datasets written with `Dataset.save_to_disk` are not loadable via `load_dataset`.
+            if "save_to_disk" not in str(e):
+                raise
+            logger.debug(f"Dataset {dataset_name} was saved with `save_to_disk`, falling back to `load_from_disk`")
+            dataset = load_from_disk(dataset_name)
+            if isinstance(dataset, DatasetDict):
+                dataset = dataset[split]
+            dataset = cast(Dataset, dataset)
         num_examples = len(dataset)
         dataset = dataset.add_column("__subset", [subset] * num_examples, new_fingerprint=str(uuid.uuid4()))
         dataset = dataset.add_column("__split", [split] * num_examples, new_fingerprint=str(uuid.uuid4()))
