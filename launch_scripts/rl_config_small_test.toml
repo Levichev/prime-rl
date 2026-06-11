@@ -1,0 +1,41 @@
+# RL smoke-test config migrated from the 2025-12-24 snapshot to the current config schema.
+# Changes vs the original:
+#   - `[orchestrator.sampling]` -> `[orchestrator.train.sampling]`, `max_tokens` -> `max_completion_tokens`
+#   - `[[orchestrator.env]]` -> `[[orchestrator.train.env]]`
+#   - `rollouts_per_example` -> `group_size`
+# The reverse-text environment now comes from the deps/research-environments submodule:
+#   git submodule update --init && uv sync --extra envs
+# Run: uv run rl @ launch_scripts/rl_config_small_test.toml
+
+max_steps = 20
+seq_len = 2048
+
+[model]
+name = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
+
+[wandb]
+project = "reverse-text"
+name = "reverse-text"
+
+[orchestrator]
+batch_size = 128
+group_size = 16
+
+[orchestrator.train.sampling]
+max_completion_tokens = 128
+
+[[orchestrator.train.env]]
+id = "reverse-text"
+
+# Model not in MODEL_RENDERER_MAP — opt into DefaultRenderer (apply_chat_template).
+[orchestrator.renderer]
+name = "default"
+
+[trainer.optim]
+lr = 3e-6
+
+[trainer.tensorboard]
+
+[ckpt] # Checkpoint at the end of training
+
+[inference]

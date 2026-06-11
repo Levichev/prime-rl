@@ -1,0 +1,51 @@
+# SFT config migrated from the 2025-12-24 snapshot to the current config schema.
+# Changes vs the original:
+#   - `model.tp` removed (the field no longer exists in the trainer ModelConfig)
+#   - `model.seq_len` added (sequence length now also lives on the model config)
+#   - `ckpt.keep` -> `ckpt.keep_last`
+#   - `data.micro-batch-size` -> snake_case `micro_batch_size`
+#   - `[tensorboard]` enables TensorBoard event files at <output_dir>/tensorboard
+# Run: uv run sft @ launch_scripts/sft_config.toml
+
+max_steps = 10
+output_dir = "/home/jovyan/shares/SR008.fs2/toporkov/projects/prime_rl/prime-rl/outputs/glm_test"
+
+[model]
+name = "/home/jovyan/shares/SR008.fs2/toporkov/projects/models/glm05_prime_tok"
+seq_len = 32768
+optimization_dtype = "bfloat16"
+reduce_dtype = "float32"
+ep = 1
+cp = 1
+dp_replicate = 1
+
+[model.compile]
+
+[model.ac]
+
+[optim]
+type = "adamw"
+lr = 2e-5
+weight_decay = 0.01
+
+[scheduler]
+type = "cosine"
+warmup_steps = 100
+
+[ckpt]
+interval = 9999999
+keep_last = 2
+
+[ckpt.weights]
+save_format = "safetensors"
+
+[data]
+type = "sft"
+name = "willcb/R1-reverse-wikipedia-paragraphs-v1-1000"
+batch_size = 256
+micro_batch_size = 256
+seq_len = 32768
+seed = 0
+pack_function = "cat"
+
+[tensorboard]
