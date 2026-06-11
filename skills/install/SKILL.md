@@ -43,11 +43,13 @@ CUDA_HOME=/usr/local/cuda uv pip install mamba-ssm
 
 Requires `nvcc`. Without `mamba-ssm`, NemotronH falls back to HF's pure-PyTorch SSD path, which computes softplus in bf16 and yields ~0.4 KL divergence vs vLLM. Do **not** install `causal-conv1d` unless your GPU arch matches the prebuilt kernels — the code falls back to `nn.Conv1d` when it's absent.
 
-### FP8 inference (GLM-5-FP8, etc.)
+### FP8 (GLM-5-FP8 inference, FP8 training)
 
 ```bash
-uv sync --group fp8-inference   # installs the prebuilt deep-gemm wheel
+uv sync --extra disagg   # installs the prebuilt deep-gemm wheel (plus deep-ep, nixl, vllm-router)
 ```
+
+deep-gemm provides the FP8 kernels for both vLLM inference (`use_deep_gemm = true`) and trainer FP8 (`model.fp8 = true`).
 
 ### Trainer DeepEP backend
 
