@@ -1,0 +1,62 @@
+# SFT config for Qwen3-Next, based on the December sft_config_copy.toml (Qwen3-30B) hyperparams.
+# Schema changes vs December:
+#   - `model.tp` removed (field no longer exists)
+#   - `ckpt.keep` -> `ckpt.keep_last`
+#   - `scheduler.decay_steps` removed from cosine (it now decays over all post-warmup steps;
+#     with December's decay_steps = max_steps - warmup_steps the behavior is identical)
+#   - `[tensorboard]` is new: events at <output_dir>/tensorboard
+# Run: uv run sft @ launch_scripts/sft_qwen3_next.toml
+
+max_steps = 2370
+output_dir = "/home/jovyan/shares/SR008.fs2/toporkov/projects/prime_rl/prime-rl/outputs/qwen3_next"
+loss_impl = "torch"
+
+[model]
+name = "Qwen/Qwen3-Next-80B-A3B-Instruct"  # or a local snapshot path
+impl = "custom"
+seq_len = 32768
+optimization_dtype = "bfloat16"
+reduce_dtype = "bfloat16"
+ep = 1
+cp = 1
+dp_replicate = 1
+attn = "flash_attention_2"
+
+[model.ac]
+
+[model.compile]
+
+[optim]
+type = "adamw"
+lr = 5e-5
+weight_decay = 0.01
+
+[scheduler]
+type = "cosine"
+warmup_steps = 300
+min_lr = 1e-8
+
+[ckpt]
+interval = 474
+keep_last = 3
+resume_step = -1
+
+[ckpt.weights]
+save_format = "safetensors"
+
+[data]
+type = "sft"
+name = "/home/jovyan/shares/SR008.fs2/toporkov/projects/prime_rl/datasets/converted_hybrid_v1.2_sp"
+batch_size = 256
+micro_batch_size = 1
+seq_len = 32768
+pack_function = "cat"
+shuffle = false
+seed = 0
+
+[wandb]
+project = "prime-rl"
+name = "qwen3_next_sft"
+offline = true
+
+[tensorboard]
