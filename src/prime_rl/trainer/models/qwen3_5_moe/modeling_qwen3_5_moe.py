@@ -123,8 +123,14 @@ def torch_chunk_gated_delta_rule(
     initial_state=None,
     output_final_state=False,
     use_qk_l2norm_in_kernel=False,
+    cu_seqlens=None,
 ):
     """Pure-PyTorch fallback for chunk_gated_delta_rule."""
+    if cu_seqlens is not None:
+        raise NotImplementedError(
+            "The pure-PyTorch chunk_gated_delta_rule fallback does not support varlen (cu_seqlens). "
+            "Install flash-linear-attention for packed-sequence training."
+        )
     initial_dtype = query.dtype
     if use_qk_l2norm_in_kernel:
         query = l2norm(query, dim=-1, eps=1e-6)
@@ -256,6 +262,15 @@ class Qwen3_5MoeGatedDeltaNet(nn.Module):
             conv1d_kernel_size=self.conv_kernel_size,
         )
 
+    def _project(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Project hidden states to (mixed_qkv [b, conv_dim, s], z, b, a). Subclasses may repack."""
+        batch_size, seq_len, _ = hidden_states.shape
+        mixed_qkv = self.in_proj_qkv(hidden_states).transpose(1, 2)
+        z = self.in_proj_z(hidden_states).reshape(batch_size, seq_len, -1, self.head_v_dim)
+        b = self.in_proj_b(hidden_states)
+        a = self.in_proj_a(hidden_states)
+        return mixed_qkv, z, b, a
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -263,10 +278,7 @@ class Qwen3_5MoeGatedDeltaNet(nn.Module):
     ) -> torch.Tensor:
         batch_size, seq_len, _ = hidden_states.shape
 
-        mixed_qkv = self.in_proj_qkv(hidden_states).transpose(1, 2)
-        z = self.in_proj_z(hidden_states).reshape(batch_size, seq_len, -1, self.head_v_dim)
-        b = self.in_proj_b(hidden_states)
-        a = self.in_proj_a(hidden_states)
+        mixed_qkv, z, b, a = self._project(hidden_states)
 
         # Causal conv1d — must reset at sequence boundaries for packed batches,
         # otherwise the kernel-1 left pad leaks state across sequences.
@@ -591,6 +603,8 @@ def _get_gated_attention(config: Qwen3_5MoeConfig) -> nn.Module:
 
 
 class Qwen3_5MoeDecoderLayer(GradientCheckpointingLayer):
+    gated_delta_net_cls: type[Qwen3_5MoeGatedDeltaNet]  # set after class definition; overridable by subclasses
+
     def __init__(self, config: Qwen3_5MoeConfig, layer_idx: int):
         super().__init__()
         self.hidden_size = config.hidden_size
@@ -598,7 +612,7 @@ class Qwen3_5MoeDecoderLayer(GradientCheckpointingLayer):
 
         # Token mixer: either GatedDeltaNet or gated softmax attention
         if self.layer_type == "linear_attention":
-            self.linear_attn = Qwen3_5MoeGatedDeltaNet(config)
+            self.linear_attn = self.gated_delta_net_cls(config)
         elif self.layer_type == "full_attention":
             self.self_attn = _get_gated_attention(config)
 
@@ -665,6 +679,9 @@ class Qwen3_5MoeDecoderLayer(GradientCheckpointingLayer):
 
         hidden_states = residual + routed_output + shared_output
         return hidden_states
+
+
+Qwen3_5MoeDecoderLayer.gated_delta_net_cls = Qwen3_5MoeGatedDeltaNet
 
 
 # ---------------------------------------------------------------------------
@@ -736,6 +753,8 @@ class Qwen3_5MoePreTrainedModel(PreTrainedModelPrimeRL):
 
 
 class Qwen3_5MoeModel(Qwen3_5MoePreTrainedModel):
+    decoder_layer_cls: type[Qwen3_5MoeDecoderLayer] = Qwen3_5MoeDecoderLayer
+
     def __init__(self, config: Qwen3_5MoeConfig):
         super().__init__(config)
         self.padding_idx = config.pad_token_id
@@ -743,7 +762,7 @@ class Qwen3_5MoeModel(Qwen3_5MoePreTrainedModel):
 
         self.embed_tokens = nn.Embedding(config.vocab_size, config.hidden_size, self.padding_idx)
         self.layers = nn.ModuleList(
-            [Qwen3_5MoeDecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
+            [self.decoder_layer_cls(config, layer_idx) for layer_idx in range(config.num_hidden_layers)]
         )
         self.norm = Qwen3_5MoeRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rotary_emb = _create_rotary_emb(config)
@@ -889,6 +908,8 @@ class Qwen3_5MoeForCausalLM(Qwen3_5MoePreTrainedModel, GenerationMixin):
     _tp_plan = {"lm_head": "colwise_rep"}
     _pp_plan = {"lm_head": (["hidden_states"], ["logits"])}
 
+    text_model_cls: type[Qwen3_5MoeModel] = Qwen3_5MoeModel
+
     def __init__(self, config, **kwargs):
         super().__init__(config, **kwargs)
         self._is_vlm = hasattr(config, "vision_config")
@@ -898,7 +919,7 @@ class Qwen3_5MoeForCausalLM(Qwen3_5MoePreTrainedModel, GenerationMixin):
             text_config = config.text_config
             self._tied_weights_keys = {"lm_head.weight": "model.language_model.embed_tokens.weight"}
         else:
-            self.model = Qwen3_5MoeModel(config)
+            self.model = self.text_model_cls(config)
             text_config = config
 
         self.vocab_size = text_config.vocab_size
