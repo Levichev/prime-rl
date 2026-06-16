@@ -56,8 +56,8 @@ from prime_rl.trainer.models.deepseek_v3.converting_deepseek_v3 import (
 import math
 from typing import Literal
 
-from prime_rl.trainer import perf
-from prime_rl.trainer.perf import PerfCounter, PretrainedConfig
+# from prime_rl.trainer import perf
+# from prime_rl.trainer.perf import PerfCounter, PretrainedConfig
 from prime_rl.utils.sequence import get_cu_seqlens_from_position_ids
 
 

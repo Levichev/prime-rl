@@ -1,0 +1,77 @@
+
+max_steps = 300
+output_dir = "/workspace-SR008.fs2/ipetrov/train-prime_rl/outputs_rev-text_giga3-10b-v2"
+loss_impl = "liger_fused"
+
+
+[wandb]
+project = "prime-rl"
+name = "rev-text_giga3-10b-sft-v2"
+offline = true
+
+# [tensorboard]
+# log_dir = "/workspace-SR008.fs2/ipetrov/train-prime_rl/tensorboard/"
+# name = "rev-text_giga3-10b-sft-v2"
+
+[ckpt]
+interval = 300
+keep_last = 5
+resume_step = -1 
+
+[ckpt.weights]
+save_format = "safetensors"
+
+
+[tokenizer]
+name = "/workspace-SR008.fs2/ipetrov/models/giga3-10B-MoE-safetensors/tokenizer_primerl"
+trust_remote_code = false
+
+
+[model]
+moe_use_grouped_mm = true
+name = "/workspace-SR008.fs2/ipetrov/models/giga3-10B-MoE-safetensors"
+optimization_dtype = "bfloat16"
+reduce_dtype = "bfloat16"
+trust_remote_code = false
+seq_len = 1024
+ep = 1
+cp = 2
+dp_replicate = 1
+attn = "flash_attention_2"
+fsdp_cpu_offload = false
+reshard_after_forward = true
+freeze_moe_router = true
+
+impl = "custom"
+
+[model.ac]
+
+[model.compile]
+
+[optim]
+type = "adamw"
+lr = 9e-5
+weight_decay = 0.01
+
+[scheduler]
+# type = "cosine"
+# warmup_steps = 300
+# min_lr = 1e-7
+# decay_steps = 4700
+
+
+
+[data]
+type = "sft"
+name = "PrimeIntellect/Reverse-Text-SFT"
+batch_size = 32
+# micro_batch_size = 1
+seq_len = 1024
+pack_function = "cat"
+shuffle = true
+seed = 42
+
+
+[deployment]
+type = "single_node"
+num_gpus = 2

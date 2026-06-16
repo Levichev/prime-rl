@@ -305,7 +305,7 @@ def substitute_ring_attn(
     else:
         ring_func = llama3_flash_attn_varlen_func
 
-    def _ring_compute_attention(self, q, k, v, cu_seqlens, max_seqlen):
+    def _ring_compute_attention(self, q, k, v, cu_seqlens, max_seqlen, softmax_scale = None):
         from ring_flash_attn.adapters.hf_adapter import DATA_PARAMS
 
         window_size = (-1, -1)
@@ -326,6 +326,7 @@ def substitute_ring_attn(
             window_size=window_size,
             group=process_group,
             heads_k_stride=heads_k_stride,
+            softmax_scale = softmax_scale
         )
         if isinstance(out, tuple):
             out = out[0]
