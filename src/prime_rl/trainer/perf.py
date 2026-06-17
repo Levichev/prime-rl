@@ -120,7 +120,7 @@ class PerfCounter:
         num_hidden_layers = config.num_hidden_layers
 
         ## Attention
-        if hasattr(config, "q_lora_rank") and hasattr(config, "kv_lora_rank"):
+        if getattr(config, "q_lora_rank", None) is not None and getattr(config, "kv_lora_rank", None) is not None:
             # MLA
             q_params = num_hidden_layers * (
                 hidden_size * config.q_lora_rank + config.q_lora_rank * num_attention_heads * config.qk_head_dim
