@@ -198,6 +198,7 @@ class DeepSeekV3MoE(MoE):
             top_k=config.num_experts_per_tok,
             use_grouped_mm=config.use_grouped_mm,
             load_balance_coeff=config.load_balance_coeff,
+            fp8=getattr(config, "fp8", False),
         )
         super().__init__(
             moe_args, dim=config.hidden_size, hidden_dim=config.moe_intermediate_size
