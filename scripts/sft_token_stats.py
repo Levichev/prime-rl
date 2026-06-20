@@ -18,7 +18,7 @@ Run:
       --tokenizer nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16
 
 Heavy: unroll@T renders one growing-prefix sample per user turn, so cost is
-~quadratic in turns for long conversations. Prints progress every 50 rows.
+~quadratic in turns for long conversations. Shows a tqdm progress bar.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import collections
 import json
 
 from datasets import DatasetDict, load_from_disk
+from tqdm import tqdm
 from transformers import AutoTokenizer
 
 
@@ -94,10 +95,7 @@ def main() -> None:
         n=0, multi=0, src_F=0, src_T=0, unr_T=0, unr_rows=0, skipped=0,
         asst=0, think_chars=0, content_chars=0, nothink_turns=0,
     ))
-    n = len(ds)
-    for i, ex in enumerate(ds):
-        if i % 50 == 0:
-            print(f"... {i}/{n}", flush=True)
+    for ex in tqdm(ds, desc="rows", unit="conv"):
         sub = ex.get("subset") or "None"
         a = agg[sub]
         a["n"] += 1
