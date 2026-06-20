@@ -172,10 +172,19 @@ class SFTDataset(StatefulIterableDataset):
             # as a whole-chat training sample with an empty prompt.
             if "messages" in example:
                 messages = normalize_messages(example["messages"], default_role="assistant")
+                # Whole-chat sample has an empty prompt, so every message is completion.
+                for message in messages:
+                    message["_is_completion"] = True
             elif "prompt" in example and "completion" in example:
-                messages = normalize_messages(example["prompt"], default_role="user") + normalize_messages(
-                    example["completion"], default_role="assistant"
-                )
+                prompt_messages = normalize_messages(example["prompt"], default_role="user")
+                completion_messages = normalize_messages(example["completion"], default_role="assistant")
+                # Tag origin so `completion_only` masking can distinguish the two halves.
+                # `deserialize_tool_calls` / `strip_message_content` preserve extra keys.
+                for message in prompt_messages:
+                    message["_is_completion"] = False
+                for message in completion_messages:
+                    message["_is_completion"] = True
+                messages = prompt_messages + completion_messages
             else:
                 raise ValueError(
                     "All examples in the dataset must have either a 'messages' column "
@@ -221,6 +230,9 @@ class SFTDataset(StatefulIterableDataset):
 
         def should_mask(message: dict) -> bool:
             assert "role" in message, "Message must have a role"
+            # `completion_only`: mask everything from the prompt half regardless of role.
+            if self.loss_mask_config.completion_only and not message.get("_is_completion", True):
+                return False
             match message["role"]:
                 case "user":
                     return True if self.loss_mask_config.user else False

@@ -71,6 +71,16 @@ class LossMaskConfig(BaseConfig):
     tool: bool = False
     """Tool messages contribute to the loss."""
 
+    completion_only: bool = False
+    """Only messages from the ``completion`` field contribute to the loss; everything
+    from ``prompt`` is masked out regardless of role. Composes with the role flags above
+    (final mask = role flag AND completion-origin). For the ``messages`` column (whole-chat,
+    empty prompt) every message counts as completion, so this is a no-op there.
+
+    Pair with per-turn unrolled data (prompt = history, completion = current turn) to train
+    only the current turn — mirrors the RL path's prompt/completion masking and keeps
+    train==inference under history-truncating chat templates."""
+
 
 class SFTDataConfig(BaseDataConfig):
     type: Literal["sft"] = "sft"
