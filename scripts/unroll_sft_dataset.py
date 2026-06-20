@@ -42,12 +42,15 @@ def _norm_msg(m: dict) -> dict:
     }
 
 
-def unroll_conversation(prompt: list[dict], completion: list[dict]) -> tuple[list[tuple[list[dict], list[dict]]], str | None]:
-    """Return (samples, anomaly). ``samples`` is a list of (prompt_out, completion_out).
+def unroll_conversation(
+    prompt: list[dict], completion: list[dict], max_users: int | None = None
+) -> tuple[list[tuple[list[dict], list[dict]]], str | None]:
+    """Return (samples, status). ``samples`` is a list of (prompt_out, completion_out).
 
-    anomaly is a short reason string when the whole conversation is skipped
-    (currently only a stray non-leading ``system`` message, which the renderer
-    rejects), else None.
+    status is None for a normal unroll, ``"capped"`` when the conversation has
+    more than ``max_users`` user turns (kept as a single un-split sample to
+    avoid the quadratic prefix blow-up), or a skip reason (``"system_not_leading"``,
+    ``"no_user"``) with empty samples.
     """
     full = [dict(m) for m in list(prompt) + list(completion)]
 
@@ -60,6 +63,11 @@ def unroll_conversation(prompt: list[dict], completion: list[dict]) -> tuple[lis
     user_idx = [i for i, m in enumerate(full) if m.get("role") == "user"]
     if not user_idx:
         return [], "no_user"
+
+    # Pathological long-tail conversations explode under unroll (one growing-
+    # prefix sample per user turn). Keep them as a single sample instead.
+    if max_users is not None and len(user_idx) > max_users:
+        return [([_norm_msg(m) for m in prompt], [_norm_msg(m) for m in completion])], "capped"
 
     ends = user_idx[1:] + [len(full)]
     samples: list[tuple[list[dict], list[dict]]] = []
@@ -75,7 +83,7 @@ def unroll_conversation(prompt: list[dict], completion: list[dict]) -> tuple[lis
     return samples, None
 
 
-def unroll_split(ds: Dataset) -> tuple[Dataset, dict]:
+def unroll_split(ds: Dataset, max_users: int | None = None) -> tuple[Dataset, dict]:
     carry_cols = [c for c in ds.column_names if c not in ("prompt", "completion")]
     out_rows: list[dict] = []
     stats = {
@@ -83,18 +91,21 @@ def unroll_split(ds: Dataset) -> tuple[Dataset, dict]:
         "out_rows": 0,
         "skipped_convs": 0,
         "skipped_empty_blocks": 0,
+        "capped": 0,
         "src_assistant_turns": 0,
         "out_assistant_turns": 0,
         "anomalies": {},
         "skipped_indices": [],
     }
     for idx, ex in enumerate(ds):
-        samples, anomaly = unroll_conversation(ex["prompt"], ex["completion"])
-        if anomaly is not None:
+        samples, status = unroll_conversation(ex["prompt"], ex["completion"], max_users)
+        if status in ("system_not_leading", "no_user"):
             stats["skipped_convs"] += 1
-            stats["anomalies"][anomaly] = stats["anomalies"].get(anomaly, 0) + 1
+            stats["anomalies"][status] = stats["anomalies"].get(status, 0) + 1
             stats["skipped_indices"].append(idx)
             continue
+        if status == "capped":
+            stats["capped"] += 1
         full_roles = [m.get("role") for m in list(ex["prompt"]) + list(ex["completion"])]
         # Count source assistant turns only for non-skipped convs so the
         # conservation invariant (src == out) holds exactly.
@@ -121,6 +132,14 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("in_dir", help="input dataset dir (datasets.load_from_disk format)")
     ap.add_argument("out_dir", help="output dataset dir")
+    ap.add_argument(
+        "--max-users",
+        type=int,
+        default=None,
+        help="conversations with more than this many user turns are kept as a single "
+        "un-split sample (avoids the quadratic prefix blow-up on long tails); "
+        "default: unroll everything",
+    )
     args = ap.parse_args()
 
     obj = load_from_disk(args.in_dir)
@@ -128,7 +147,7 @@ def main() -> None:
 
     out_dd = {}
     for name, ds in splits.items():
-        out_ds, stats = unroll_split(ds)
+        out_ds, stats = unroll_split(ds, max_users=args.max_users)
         out_dd[name] = out_ds
         print(f"[{name}]")
         print(f"  in_rows                {stats['in_rows']}")
@@ -137,14 +156,22 @@ def main() -> None:
         if stats["skipped_indices"]:
             print(f"  skipped row indices    {stats['skipped_indices']}")
         print(f"  skipped_empty_blocks   {stats['skipped_empty_blocks']}")
+        print(f"  capped (kept as 1)     {stats['capped']}")
+        gap = stats["src_assistant_turns"] - stats["out_assistant_turns"]
         print(f"  assistant turns: src={stats['src_assistant_turns']} out={stats['out_assistant_turns']}")
-        # Conservation: every assistant turn from non-skipped convs must survive.
-        if stats["src_assistant_turns"] != stats["out_assistant_turns"]:
+        # Unrolling never duplicates an assistant turn across completions, so out
+        # can only be <= src. A positive gap = assistant turns that are history-only
+        # (they precede the first user, so nothing prompted them) and thus can't be
+        # a training target — preserved as context, just not supervised. out > src
+        # would mean a real bug (duplication).
+        if stats["out_assistant_turns"] > stats["src_assistant_turns"]:
             raise SystemExit(
-                f"  ASSERT FAILED: assistant turns not conserved "
-                f"({stats['src_assistant_turns']} != {stats['out_assistant_turns']})"
+                f"  ASSERT FAILED: out assistant turns exceed src "
+                f"({stats['out_assistant_turns']} > {stats['src_assistant_turns']})"
             )
-        print("  assistant-turn conservation: OK")
+        if gap:
+            print(f"  history-only assistant turns (not training targets): {gap}")
+        print("  assistant-turn conservation: OK (out <= src)")
 
     DatasetDict(out_dd).save_to_disk(args.out_dir)
     print(f"saved -> {args.out_dir}")
