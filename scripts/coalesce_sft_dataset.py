@@ -97,7 +97,27 @@ def _norm(m: dict) -> dict:
     }
 
 
-def coalesce_segments(prompt: list[dict], completion: list[dict]) -> list[tuple[list[dict], list[dict]]]:
+def _strip_history_think(prompt_out: list[dict], completion_out: list[dict]) -> None:
+    """In place: drop <think>…</think> from assistant turns before the last user
+    (history), so a *stock* (non-stripping) chat template renders the same history
+    a `truncate_history_thinking` template would. Current-turn reasoning (after the
+    last user) is kept. Same rule as the modified Qwen template:
+    ``content.split('</think>')[-1] | trim`` over the template's loop_messages
+    (i.e. excluding a leading system message)."""
+    full = prompt_out + completion_out
+    offset = 1 if full and full[0].get("role") == "system" else 0
+    loop_msgs = full[offset:]
+    last_user = max((i for i, m in enumerate(loop_msgs) if m.get("role") == "user"), default=-1)
+    for i, m in enumerate(loop_msgs):
+        if m.get("role") == "assistant" and i < last_user:
+            c = m.get("content") or ""
+            if "</think>" in c:
+                m["content"] = c.split("</think>")[-1].strip()
+
+
+def coalesce_segments(
+    prompt: list[dict], completion: list[dict], strip_history: bool = False
+) -> list[tuple[list[dict], list[dict]]]:
     """Return [(prompt_out, completion_out), ...] for one conversation."""
     full = list(prompt) + list(completion)
 
@@ -130,11 +150,15 @@ def coalesce_segments(prompt: list[dict], completion: list[dict]) -> list[tuple[
         block = full[s:e]
         if not any(m.get("role") == "assistant" for m in block):
             continue  # no trainable turn in this segment
-        out.append(([_norm(m) for m in full[:s]], [_norm(m) for m in block]))
+        prompt_out = [_norm(m) for m in full[:s]]
+        completion_out = [_norm(m) for m in block]
+        if strip_history:
+            _strip_history_think(prompt_out, completion_out)
+        out.append((prompt_out, completion_out))
     return out
 
 
-def _make_transform(carry_cols: list[str], tokenizer: str | None, seq_len: int | None):
+def _make_transform(carry_cols: list[str], tokenizer: str | None, seq_len: int | None, strip_history: bool):
     has_tools = "tools" in carry_cols
 
     def transform(batch: dict) -> dict:
@@ -144,7 +168,7 @@ def _make_transform(carry_cols: list[str], tokenizer: str | None, seq_len: int |
         tok = _get_tok(tokenizer) if tokenizer else None
         n = len(batch["prompt"])
         for r in range(n):
-            segments = coalesce_segments(batch["prompt"][r], batch["completion"][r])
+            segments = coalesce_segments(batch["prompt"][r], batch["completion"][r], strip_history=strip_history)
             tools = json.loads(batch["tools"][r] or "[]") if has_tools else []
             for prompt_out, completion_out in segments:
                 # Skip segments whose trainable tokens fall entirely past seq_len
@@ -162,10 +186,10 @@ def _make_transform(carry_cols: list[str], tokenizer: str | None, seq_len: int |
     return transform
 
 
-def split_dataset(ds: Dataset, workers: int, tokenizer: str | None, seq_len: int | None) -> Dataset:
+def split_dataset(ds: Dataset, workers: int, tokenizer: str | None, seq_len: int | None, strip_history: bool) -> Dataset:
     carry_cols = [c for c in ds.column_names if c not in ("prompt", "completion")]
     return ds.map(
-        _make_transform(carry_cols, tokenizer, seq_len),
+        _make_transform(carry_cols, tokenizer, seq_len, strip_history),
         batched=True,
         num_proc=workers,
         remove_columns=ds.column_names,
@@ -186,6 +210,13 @@ def main() -> None:
         "chat-template render + truncation to seq_len (e.g. Nemotron-3 tokenizer path)",
     )
     ap.add_argument("--seq-len", type=int, default=None, help="training context length (required with --tokenizer)")
+    ap.add_argument(
+        "--strip-history-think",
+        action="store_true",
+        help="remove <think>…</think> from history assistant turns in the data (turns before "
+        "the last user), so a stock chat template + completion_only matches a "
+        "truncate_history_thinking template at inference. Current-turn reasoning is kept.",
+    )
     args = ap.parse_args()
 
     if (args.tokenizer is None) != (args.seq_len is None):
@@ -196,7 +227,7 @@ def main() -> None:
 
     out = {}
     for name, ds in splits.items():
-        new = split_dataset(ds, args.workers, args.tokenizer, args.seq_len)
+        new = split_dataset(ds, args.workers, args.tokenizer, args.seq_len, args.strip_history_think)
         out[name] = new
         print(f"[{name}] {len(ds):,} conversations -> {len(new):,} examples")
 
