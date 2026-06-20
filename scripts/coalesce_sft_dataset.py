@@ -25,9 +25,61 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 
 from datasets import Dataset, DatasetDict, load_from_disk
+
+# Per-worker tokenizer cache (datasets.map forks; load once per process).
+_TOK = None
+_TOK_NAME = None
+
+
+def _get_tok(name: str):
+    global _TOK, _TOK_NAME
+    if _TOK is None or _TOK_NAME != name:
+        from transformers import AutoTokenizer
+
+        _TOK = AutoTokenizer.from_pretrained(name, trust_remote_code=True)
+        _TOK_NAME = name
+    return _TOK
+
+
+def _tmpl_messages(msgs: list[dict]) -> list[dict]:
+    """Shape messages for apply_chat_template (tool-call args -> dict)."""
+    out = []
+    for m in msgs:
+        d = {"role": m["role"], "content": m.get("content") or ""}
+        tcs = [c for c in (m.get("tool_calls") or []) if c]
+        if tcs:
+            fx = []
+            for c in tcs:
+                f = c.get("function") or c
+                a = f.get("arguments")
+                if isinstance(a, str):
+                    try:
+                        a = json.loads(a)
+                    except Exception:
+                        a = {}
+                fx.append({"function": {"name": f.get("name"), "arguments": a}})
+            d["tool_calls"] = fx
+        out.append(d)
+    return out
+
+
+def _prompt_render_len(tok, prompt_msgs: list[dict], tools: list[dict]) -> int:
+    """Token length of the rendered prompt up to the first generated (trainable)
+    token: history (reasoning stripped) + the assistant generation prompt. The
+    segment's prompt always ends with a user, so standalone truncation matches
+    the in-sample truncation exactly. L >= seq_len  <=>  0 trainable tokens."""
+    text = tok.apply_chat_template(
+        _tmpl_messages(prompt_msgs),
+        tools=tools,
+        tokenize=False,
+        add_generation_prompt=True,
+        truncate_history_thinking=True,
+    )
+    return len(tok(text, add_special_tokens=False)["input_ids"])
 
 
 def _has_reasoning(content: str | None) -> bool:
@@ -82,14 +134,25 @@ def coalesce_segments(prompt: list[dict], completion: list[dict]) -> list[tuple[
     return out
 
 
-def _make_transform(carry_cols: list[str]):
+def _make_transform(carry_cols: list[str], tokenizer: str | None, seq_len: int | None):
+    has_tools = "tools" in carry_cols
+
     def transform(batch: dict) -> dict:
         out: dict[str, list] = {"prompt": [], "completion": []}
         for c in carry_cols:
             out[c] = []
+        tok = _get_tok(tokenizer) if tokenizer else None
         n = len(batch["prompt"])
         for r in range(n):
-            for prompt_out, completion_out in coalesce_segments(batch["prompt"][r], batch["completion"][r]):
+            segments = coalesce_segments(batch["prompt"][r], batch["completion"][r])
+            tools = json.loads(batch["tools"][r] or "[]") if has_tools else []
+            for prompt_out, completion_out in segments:
+                # Skip segments whose trainable tokens fall entirely past seq_len
+                # (0 trainable after chat-template render + truncation). Prompt
+                # render length is monotonic across segments, so the first miss
+                # means every later segment also misses -> stop this conversation.
+                if tok is not None and _prompt_render_len(tok, prompt_out, tools) >= seq_len:
+                    break
                 out["prompt"].append(prompt_out)
                 out["completion"].append(completion_out)
                 for c in carry_cols:
@@ -99,10 +162,10 @@ def _make_transform(carry_cols: list[str]):
     return transform
 
 
-def split_dataset(ds: Dataset, workers: int) -> Dataset:
+def split_dataset(ds: Dataset, workers: int, tokenizer: str | None, seq_len: int | None) -> Dataset:
     carry_cols = [c for c in ds.column_names if c not in ("prompt", "completion")]
     return ds.map(
-        _make_transform(carry_cols),
+        _make_transform(carry_cols, tokenizer, seq_len),
         batched=True,
         num_proc=workers,
         remove_columns=ds.column_names,
@@ -116,14 +179,24 @@ def main() -> None:
     ap.add_argument("in_dir", help="input dataset dir (datasets.load_from_disk format)")
     ap.add_argument("out_dir", help="output dataset dir")
     ap.add_argument("--workers", type=int, default=os.cpu_count(), help="num_proc for datasets.map")
+    ap.add_argument(
+        "--tokenizer",
+        default=None,
+        help="if set (with --seq-len), drop segments with 0 trainable tokens after "
+        "chat-template render + truncation to seq_len (e.g. Nemotron-3 tokenizer path)",
+    )
+    ap.add_argument("--seq-len", type=int, default=None, help="training context length (required with --tokenizer)")
     args = ap.parse_args()
+
+    if (args.tokenizer is None) != (args.seq_len is None):
+        ap.error("--tokenizer and --seq-len must be given together")
 
     obj = load_from_disk(args.in_dir)
     splits = obj if isinstance(obj, DatasetDict) else DatasetDict({"train": obj})
 
     out = {}
     for name, ds in splits.items():
-        new = split_dataset(ds, args.workers)
+        new = split_dataset(ds, args.workers, args.tokenizer, args.seq_len)
         out[name] = new
         print(f"[{name}] {len(ds):,} conversations -> {len(new):,} examples")
 
